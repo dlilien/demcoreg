@@ -44,7 +44,8 @@ def get_nlcd_fn(yr=2016):
     #get_nlcd.sh creates a compressed GTiff, which is 1.1 GB
     #nlcd_fn = os.path.join(datadir, 'nlcd_2011_landcover_2011_edition_2014_10_10/nlcd_2011_landcover_2011_edition_2014_10_10.tif')
     #nlcd_fn = os.path.join(datadir, 'NLCD_{0}_Land_Cover_L48_20190424/NLCD_{0}_Land_Cover_L48_20190424.tif'.format(str(yr)))
-    nlcd_fn = os.path.join(datadir, 'nlcd_{0}_land_cover_l48_20210604.tif'.format(str(yr)))
+    # nlcd_fn = os.path.join(datadir, 'nlcd_{0}_land_cover_l48_20210604.tif'.format(str(yr)))
+    nlcd_fn = os.path.join('/colddata/loki-rd04/dal22/global_data/', 'CAN_NALCMS_2010_v2_land_cover_30m.tif')
     if not os.path.exists(nlcd_fn):
         cmd = ['get_nlcd.sh', str(yr)]
         #subprocess.call(cmd)
@@ -106,6 +107,28 @@ def get_icemask(ds, glac_shp_fn=None):
     #All of the proj, extent, handling should now occur in shp2array
     icemask = geolib.shp2array(glac_shp_fn, ds)
     return icemask
+
+
+def get_can_mask(can_ds, filter='land', out_fn=None):
+    """Generate raster mask for specified NLCD LULC filter
+    """
+    b = can_ds.GetRasterBand(1)
+    l = b.ReadAsArray()
+    print("Filtering CAN with: %s" % filter)
+
+    if filter == 'land':
+        mask = np.logical_and((l < 17), (l > 0))
+    elif filter == 'ice':
+        mask = (l == 19)
+    else:
+        print("Invalid mask type")
+        mask = None
+    #Write out original data
+    if out_fn is not None:
+        print("Writing out %s" % out_fn)
+        iolib.writeGTiff(l, out_fn, can_ds)
+    l = None
+    return mask
 
 #Create nlcd mask 
 def get_nlcd_mask(nlcd_ds, filter='not_forest', out_fn=None):
@@ -463,6 +486,21 @@ def get_mask(dem_ds, mask_list, dem_fn=None, writeout=False, outdir=None, args=N
                 print("Writing out %s" % out_fn)
                 iolib.writeGTiff(nlcdmask, out_fn, src_ds=dem_ds)
             newmask = np.logical_and(nlcdmask, newmask)
+        if 'can' in mask_list and args.can_filter != 'none':
+            rs = 'near'
+            can_fn = os.path.join('/colddata/loki-rd04/dal22/global_data/', 'CAN_NALCMS_2010_v2_land_cover_30m.tif')
+            can_ds = gdal.Open(can_fn)
+            can_ds_warp = warplib.memwarp_multi([can_ds,], res=dem_ds, extent=dem_ds, t_srs=dem_ds, r=rs)[0]
+            out_fn = None
+            if writeout:
+                out_fn = out_fn_base+'_can.tif'
+            canmask = get_can_mask(can_ds_warp, filter=args.can_filter, out_fn=out_fn)
+            if writeout:
+                out_fn = os.path.splitext(out_fn)[0]+'_mask.tif'
+                print("Writing out %s" % out_fn)
+                iolib.writeGTiff(canmask, out_fn, src_ds=dem_ds)
+            newmask = np.logical_and(canmask, newmask)
+
 
         if 'bareground' in mask_list and args.bareground_thresh > 0:
             bareground_ds = gdal.Open(get_bareground_fn())
@@ -567,7 +605,7 @@ def get_mask(dem_ds, mask_list, dem_fn=None, writeout=False, outdir=None, args=N
     return newmask
 
 #Can add "mask_list" argument, instead of specifying individually
-mask_choices = ['toa', 'snodas', 'modscag', 'bareground', 'glaciers', 'nlcd', 'none']
+mask_choices = ['toa', 'snodas', 'modscag', 'bareground', 'glaciers', 'nlcd', 'can', 'none']
 def getparser():
     parser = argparse.ArgumentParser(description="Identify control surfaces for DEM co-registration") 
     parser.add_argument('dem_fn', type=str, help='DEM filename')
@@ -586,6 +624,9 @@ def getparser():
     parser.add_argument('--nlcd', action='store_true', help="Enable NLCD LULC filter (for CONUS)")
     nlcd_filter_choices = ['rock', 'rock+ice', 'rock+ice+water', 'not_forest', 'not_forest+not_water', 'none']
     parser.add_argument('--nlcd_filter', type=str, default='not_forest', choices=nlcd_filter_choices, help='Preserve these NLCD pixels (default: %(default)s)') 
+    can_filter_choices = ['land', 'ice']
+    parser.add_argument('--can', action='store_true', help="Enable Canada land cover filter")
+    parser.add_argument('--can_filter', type=str, default='land', choices=can_filter_choices, help='Preserve these CAN pixels (default: %(default)s)') 
     parser.add_argument('--dilate', type=int, default=None, help='Dilate mask with this many iterations (default: %(default)s)')
     return parser
 
@@ -600,6 +641,7 @@ def main():
     if args.bareground: mask_list.append('bareground') 
     if args.glaciers: mask_list.append('glaciers') 
     if args.nlcd: mask_list.append('nlcd') 
+    if args.can: mask_list.append('can') 
 
     if not mask_list:
         parser.print_help()
