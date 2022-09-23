@@ -16,6 +16,7 @@ import numpy as np
 from pygeotools.lib import iolib, malib, geolib, warplib, filtlib
 
 from demcoreg import coreglib, dem_mask
+import matplotlib.pyplot as plt
 
 #Turn off numpy multithreading
 #os.environ['OPENBLAS_NUM_THREADS'] = '1'
